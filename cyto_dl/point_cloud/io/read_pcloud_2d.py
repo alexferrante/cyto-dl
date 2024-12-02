@@ -1,0 +1,160 @@
+import os
+import uuid
+from tempfile import TemporaryDirectory
+from typing import Optional, Sequence, Union
+
+import numpy as np
+import torch
+from monai.transforms import MapTransform
+from pyntcloud import PyntCloud
+from upath import UPath as Path
+
+
+class ReadPointCloud2D(MapTransform):
+    def __init__(
+        self,
+        keys: Union[str, Sequence[str]],
+        remote: bool = False,
+        sample: Optional[int] = None,
+        scale: float = 1.0,
+        num_cols: int = 3,
+        norm: bool = False,
+        flip_dims: bool = False,
+        rotate: bool = False,
+        scalar_scale: Optional[float] = 0.1,
+        final_columns: Optional[list] = None,
+        jitter: Optional[bool] = False,
+    ):
+        """
+        Parameters
+        ----------
+        keys: Union[str, Sequence[str]]
+            Key (or list thereof) of the input dictionary to interpret as paths
+            to point cloud files which should be loaded
+        remote: bool = False
+            Whether files can be in a fsspec-interpretable remote location
+        sample: Optional[int]
+            How many points to sample from the point cloud
+        scale: float
+            scale factor for X,Y,Z coordinates - e.g. X' = scale * X
+        num_cols: int
+            Number of columns to sample from the saved point cloud
+            This is relevant for ply files saved with additional scalar features
+            here we assume first 3 columns are X, Y, Z coordinates
+        norm: bool
+            Whether to normalize point cloud coordinates.
+        flip_dims: bool
+            Whether to flip dims from XYZ to ZYX
+        rotate: bool
+            Whether to add random rotation to the point cloud in the XY plane
+            assuming ordering is XYZ
+        scalar_scale: float
+            Scale factor for scalar features
+
+        """
+        super().__init__(keys)
+        self.keys = [keys] if isinstance(keys, str) else keys
+        self.remote = remote
+        self.sample = sample
+        self.norm = norm
+        self.scale = scale
+        self.num_cols = num_cols
+        self.flip_dims = flip_dims
+        self.rotate = rotate
+        self.scalar_scale = scalar_scale
+        self.final_columns = final_columns
+        self.jitter = jitter
+
+    def pc_norm(self, pc):
+        """pc: NxC, return NxC"""
+        centroid = np.mean(pc, axis=0)
+        pc = pc - centroid
+        m = np.max(np.sqrt(np.sum(pc**2, axis=1)))
+        pc = pc / m
+        return pc
+
+    
+    def __call__(self, row):
+        res = dict(**row)
+
+        for key in self.keys:
+            path = str(row[key])
+            points = PyntCloud.from_file(path).points
+
+            if points["s"].isna().any():
+                points["s"] = points["s"].replace(np.NaN, 1)
+
+            if "s" in points.columns:
+                points = points[["y", "x", "s"]]
+            else:
+                points = points[["y", "x"]]
+            if self.sample:
+                probs2 = points["s"].values
+                probs2 = np.where(probs2 < 0, 0, probs2)
+                probs2 = probs2 / probs2.sum()
+                idxs2 = np.random.choice(
+                    np.arange(len(probs2)), size=self.sample, replace=True, p=probs2
+                )
+                points = points.iloc[idxs2].reset_index(drop=True)
+
+
+            points = points.values[:, : self.num_cols]
+
+            if self.rotate:
+                points = rotate_pointcloud(points)
+
+            if self.flip_dims:
+                if self.num_cols == 2:
+                    points = points[:, -1::-1].copy()
+                else:
+                    points = np.concatenate([points[:, -2::-1], points[:, -1:]], axis=1)
+
+            if self.scale:
+                points = points * self.scale
+            if self.norm:
+                points[:, :2] = self.pc_norm(points[:, :2])
+
+            if self.jitter:
+                disp = 0.001
+                points[:, 0] = (
+                    points[:, 0] + (np.random.rand(len(points[:, 0])) - 0.5) * disp
+                )
+                points[:, 1] = (
+                    points[:, 1] + (np.random.rand(len(points[:, 1])) - 0.5) * disp
+                )
+                points[:, 2] = (
+                    points[:, 2] + (np.random.rand(len(points[:, 2])) - 0.5) * disp
+                )
+
+            res[key] = torch.tensor(
+                points,
+                dtype=torch.get_default_dtype(),
+            )
+            if self.num_cols > 2:
+                res[key][:, self.num_cols - 1 :] = (
+                    res[key][:, self.num_cols - 1 :] * self.scalar_scale
+                )
+
+            # if self.sample:
+            #     self.sample_idx = np.random.randint(res[key].shape[0], size=self.sample)
+            #     res[key] = res[key][self.sample_idx]
+            if self.final_columns:
+                res[key] = res[key][:, self.final_columns]
+
+        return res
+
+
+def rotate_pointcloud(pointcloud, rotation_matrix=None, return_rot=False):
+    pointcloud_rotated = pointcloud.copy()
+    if rotation_matrix is None:
+        theta = np.pi * 2 * np.random.choice(24) / 24
+        rotation_matrix = np.array(
+            [[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]
+        )
+    pointcloud_rotated[:, [0, 1]] = pointcloud_rotated[:, [0, 1]].dot(
+        rotation_matrix
+    )  # random rotation (x,y)
+    if return_rot:
+        return pointcloud_rotated, rotation_matrix, theta
+
+    return pointcloud_rotated

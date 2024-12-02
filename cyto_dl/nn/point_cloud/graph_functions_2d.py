@@ -63,14 +63,14 @@ def get_graph_features(
     num_dims = x.size(1)
 
     if mode == "vector":
-        num_dims = num_dims // 3
+        num_dims = num_dims // 2
 
-    x = x.transpose(2, 1).contiguous()
-    feature = x.view(batch_size * num_points, -1)[idx, :]
+    x = x.transpose(2, 1).contiguous() # [B, num_points, 2]
+    feature = x.view(batch_size * num_points, -1)[idx, :] # [B*num_points, 2]
 
     if mode == "vector":
-        feature_view_dims = (batch_size, num_points, k, num_dims, 3)
-        x_view_dims = (batch_size, num_points, 1, num_dims, 3)
+        feature_view_dims = (batch_size, num_points, k, num_dims, 2)
+        x_view_dims = (batch_size, num_points, 1, num_dims, 2)
         repeat_dims = (1, 1, k, 1, 1)
         permute_dims = (0, 3, 4, 1, 2)
     else:
@@ -83,25 +83,28 @@ def get_graph_features(
     x = x.view(*x_view_dims).repeat(*repeat_dims)
 
     if mode == "vector" and include_cross:
-        cross = torch.cross(feature, x, dim=-1)
-        feature = torch.cat((feature - x, cross), dim=3)
+        cross = feature[..., 0] * x[..., 1] - feature[..., 1] * x[..., 0] # [B, N, k, 1]
+        cross_pseudo_vector = torch.stack((torch.zeros_like(cross), cross), dim=-1)  # [B, N, k, 1, 2]
+        feature = torch.cat((feature - x, cross_pseudo_vector), dim=3) # [B, N, k, 2, 2]
     else:
         feature = feature - x
 
     if include_input:
-        feature = torch.cat((feature, x), dim=3) # [B, N, k, 3, 3] 
+        feature = torch.cat((feature, x), dim=3) # [B, N, k, 3, 2] 
 
-    feature = feature.permute(*permute_dims).contiguous() # [B, 3, 3, N, k]
+    feature = feature.permute(*permute_dims).contiguous() # [B, 3, 2, N, k]
 
     if scalar_inds:
-        feature_unit_vector = feature / torch.norm(feature, dim=1).unsqueeze(dim=1)
+        # feature_unit_vector = feature / torch.norm(feature, dim=1).unsqueeze(dim=1)
+        norm = torch.norm(feature, dim=1, keepdim=True)
+        feature_unit_vector = feature / (norm + 1e-8) # TODO: near 0 due to scaling pcloud?
         scal = scal.transpose(2, 1).contiguous()
         scal = scal.view(batch_size, num_points, 1, num_scalar_points, 1).repeat(
             1, 1, k, 1, 1
         )
         scal = scal.permute(0, 3, 4, 1, 2).contiguous()
         scal = scal * feature_unit_vector
-        feature = torch.cat((feature, scal), dim=1) # [B, 6, 3, N, k]
+        feature = torch.cat((feature, scal), dim=1) # [B, 6, 2, N, k]
     return feature
 
 

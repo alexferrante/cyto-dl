@@ -13,13 +13,13 @@ from VN_transformer import VNTransformer
 
 from cyto_dl import utils
 
-from .graph_functions import (
+from .graph_functions_2d import (
     coordinate2index,
     get_graph_features,
     normalize_3d_coordinate,
     normalize_coordinate,
 )
-from .vnn import VNLeakyReLU, VNLinear, VNLinearLeakyReLU, VNRotationMatrix
+from .vnn_2d import VNLeakyReLU, VNLinear, VNLinearLeakyReLU, VNRotationMatrix
 
 log = utils.get_pylogger(__name__)
 
@@ -74,7 +74,7 @@ def meanpool(x, dim=-1, keepdim=False):
     return out
 
 
-class DGCNN(nn.Module):
+class DGCNN2D(nn.Module):
     def __init__(
         self,
         num_features,
@@ -189,7 +189,7 @@ class DGCNN(nn.Module):
             self.pool = meanpool
             # rotation module
             self.rotation = VNRotationMatrix(
-                self.num_features, dim=3, return_rotated=True # need to be flexible to 2d !?
+                self.num_features, return_rotated=True # flex to 2d
             )
             # final embedding
             self.embedding_head = VNLinear(self.num_features, self.num_features)
@@ -349,15 +349,13 @@ class DGCNN(nn.Module):
                 x = self.rot_eq_encoder(x)
 
         input_pc = x.clone()
-        # x is [B, N, 3]
-        x = x.transpose(2, 1)  # [B, 3, N]
+        x = x.transpose(2, 1)
         num_points = x.shape[-1]
 
         intermediate_outs = []
         for idx, conv in enumerate(self.convs):
             if (idx == 0 and self.mode == "vector") or (self.mode == "scalar"):
                 x = self.get_graph_features(x, idx)
-
             if idx == 0 and self.symmetry_breaking_axis is not None:
                 if isinstance(self.symmetry_breaking_axis, int):
                     x = self.concat_axis(x, self.symmetry_breaking_axis)
@@ -397,25 +395,26 @@ class DGCNN(nn.Module):
             elif (j == _pool_ind) and (not self.generate_grid_feats):
                 x = self.pool(x, dim=-1)
 
-        # x: [b, 256, 3]
+        # x: [b, 256, 2]
         rot = torch.zeros(1).type_as(x)
-        if self.generate_grid_feats:
-            if len(x.shape) == 4:
-                _, rot = self.rotation(pre_repeat.squeeze(dim=-1))
-                rot = rot.mT
-                x = torch.norm(x, dim=-2)
-            x = x.permute(0, 2, 1).contiguous()
+        
+        # if self.generate_grid_feats:
+        #     if len(x.shape) == 4:
+        #         _, rot = self.rotation(pre_repeat.squeeze(dim=-1))
+        #         rot = rot.mT
+        #         x = torch.norm(x, dim=-2)
+        #     x = x.permute(0, 2, 1).contiguous()
 
-            fea = {}
-            if "grid" in self.plane_type:
-                fea["grid"] = self._generate_grid_features(input_pc, x)
-            if "xz" in self.plane_type:
-                fea["xz"] = self._generate_plane_features(input_pc, x, plane="xz")
-            if "xy" in self.plane_type:
-                fea["xy"] = self._generate_plane_features(input_pc, x, plane="xy")
-            if "yz" in self.plane_type:
-                fea["yz"] = self._generate_plane_features(input_pc, x, plane="yz")
-            return {self.x_label: pre_repeat, "rotation": rot, "grid_feats": fea}
+        #     fea = {}
+        #     if "grid" in self.plane_type:
+        #         fea["grid"] = self._generate_grid_features(input_pc, x)
+        #     if "xz" in self.plane_type:
+        #         fea["xz"] = self._generate_plane_features(input_pc, x, plane="xz")
+        #     if "xy" in self.plane_type:
+        #         fea["xy"] = self._generate_plane_features(input_pc, x, plane="xy")
+        #     if "yz" in self.plane_type:
+        #         fea["yz"] = self._generate_plane_features(input_pc, x, plane="yz")
+        #     return {self.x_label: pre_repeat, "rotation": rot, "grid_feats": fea}
 
         if self.mode == "vector":
             if self.neural_implicit:

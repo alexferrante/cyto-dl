@@ -258,7 +258,10 @@ class PointCloudVAE(BaseVAE):
 
         if self.get_rotation:
             rotation = z_parts["rotation"]
-            xhat = torch.einsum("bij,bjk->bik", base_xhat[:, :, :3], rotation)
+            if self.scalar_inds == 4 and base_xhat.shape[-1] == 4:
+                xhat = torch.einsum("bij,bjk->bik", base_xhat[:, :, :3], rotation)
+            else:
+                xhat = torch.einsum("bij,bjk->bik", base_xhat[:, :, :2], rotation)
             if xhat.shape[-1] != base_xhat.shape[-1]:
                 xhat = torch.cat([xhat, base_xhat[:, :, -1:]], dim=-1)
         else:
@@ -347,10 +350,8 @@ class PointCloudVAE(BaseVAE):
     def calculate_rcl(self, batch, xhat, input_key, target_key=None):
         if not target_key:
             target_key = input_key
-        rcl_per_input_dimension = self.reconstruction_loss[input_key](
-            batch[target_key], xhat[input_key]
-        )
-
+        valid_indices = ~torch.isnan(xhat[input_key]).any(dim=-1).any(dim=-1)
+        rcl_per_input_dimension = self.reconstruction_loss[input_key](batch[target_key][valid_indices], xhat[input_key][valid_indices])
         if (self.mask_keys is not None) and (self.target_mask_keys is not None):
             this_mask = batch["target_mask"].type_as(rcl_per_input_dimension).byte()
             rcl_per_input_dimension = rcl_per_input_dimension * ~this_mask.bool()
@@ -446,6 +447,12 @@ class PointCloudVAE(BaseVAE):
         # torch.isnan(z_params['pcloud']).any()
         batch = self.parse_batch(batch)
         z_params = self.encode(batch, get_rotation=self.get_rotation)
+        
+        # Z_params nan problem
+        # samples return nans in z and rot matrices: For both 3D and 2D
+        # - possibly a data problem
+        # (due to 0 norms in graph fn for dgcnn)
+        
         z_params = self.encoder_compose_function(z_params, batch)
         z = self.sample_z(z_params, inference=inference)
 
