@@ -15,6 +15,7 @@ from cyto_dl.utils.rotation import RotationModule
 from .priors import Prior
 
 from .image_encoder import ImageEncoder
+from .image_multich_encoder import ImageMultiChEncoder
 
 Array = Union[torch.Tensor, np.ndarray, Sequence[float]]
 logger = logging.getLogger("lightning")
@@ -195,19 +196,36 @@ class ImageVAE(BaseVAE):
         else:
             encoder_out_size = prior.param_size
 
-        encoder = ImageEncoder(
-            spatial_dims=spatial_dims,
-            out_dim=encoder_out_size,
-            channels=channels,
-            strides=strides,
-            maximum_frequency=maximum_frequency,
-            kernel_sizes=kernel_sizes,
-            bias=bias,
-            padding=encoder_padding,
-            group=group,
-            first_conv_padding_mode=first_conv_padding_mode,
-            num_res_units=num_res_units,
-        )
+        if in_channels == 1:
+            encoder = ImageEncoder(
+                spatial_dims=spatial_dims,
+                out_dim=encoder_out_size,
+                channels=channels,
+                strides=strides,
+                maximum_frequency=maximum_frequency,
+                kernel_sizes=kernel_sizes,
+                bias=bias,
+                padding=encoder_padding,
+                group=group,
+                first_conv_padding_mode=first_conv_padding_mode,
+                num_res_units=num_res_units,
+            )
+        else:
+            encoder = ImageMultiChEncoder(
+                spatial_dims=spatial_dims,
+                out_dim=encoder_out_size,
+                channels=channels,
+                strides=strides,
+                maximum_frequency=maximum_frequency,
+                num_in_channels=in_channels,
+                kernel_sizes=kernel_sizes,
+                bias=bias,
+                padding=encoder_padding,
+                group=group,
+                first_conv_padding_mode=first_conv_padding_mode,
+                num_res_units=num_res_units,
+            )
+            
 
         if group is not None:
             self.rotation_module = RotationModule(
@@ -266,3 +284,20 @@ class ImageVAE(BaseVAE):
             return {self.hparams.x_label: xhat, "canonical": base_xhat}
 
         return {self.hparams.x_label: xhat}
+
+    def forward(
+        self, batch, decode=False, inference=True, return_params=False, **kwargs
+    ):
+        is_inference = inference or not self.training
+
+        z_params = self.encode(batch, **kwargs)
+        z = self.sample_z(z_params, inference=inference)
+
+        if not decode:
+            return z
+
+        xhat = self.decode(z)
+        if return_params:
+            return xhat, z, z_params
+
+        return xhat, z

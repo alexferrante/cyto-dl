@@ -94,7 +94,9 @@ def get_graph_features(
     feature = feature.permute(*permute_dims).contiguous() # [B, 3, 3, N, k]
 
     if scalar_inds:
-        feature_unit_vector = feature / torch.norm(feature, dim=1).unsqueeze(dim=1)
+        # feature_unit_vector = feature / torch.norm(feature, dim=1).unsqueeze(dim=1)
+        norm = torch.norm(feature, dim=1, keepdim=True)
+        feature_unit_vector = feature / (norm + 1e-8) # TODO: near 0 due to scaling pcloud?
         scal = scal.transpose(2, 1).contiguous()
         scal = scal.view(batch_size, num_points, 1, num_scalar_points, 1).repeat(
             1, 1, k, 1, 1

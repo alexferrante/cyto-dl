@@ -258,7 +258,7 @@ class PointCloudVAE(BaseVAE):
 
         if self.get_rotation:
             rotation = z_parts["rotation"]
-            if self.scalar_inds == 4 and base_xhat.shape[-1] == 4:
+            if self.scalar_inds == 3 and base_xhat.shape[-1] == 4:
                 xhat = torch.einsum("bij,bjk->bik", base_xhat[:, :, :3], rotation)
             else:
                 xhat = torch.einsum("bij,bjk->bik", base_xhat[:, :, :2], rotation)
@@ -351,7 +351,10 @@ class PointCloudVAE(BaseVAE):
         if not target_key:
             target_key = input_key
         valid_indices = ~torch.isnan(xhat[input_key]).any(dim=-1).any(dim=-1)
-        rcl_per_input_dimension = self.reconstruction_loss[input_key](batch[target_key][valid_indices], xhat[input_key][valid_indices])
+        try:
+            rcl_per_input_dimension = self.reconstruction_loss[input_key](batch[target_key][valid_indices], xhat[input_key][valid_indices])
+        except:
+            import pdb;pdb.set_trace()
         if (self.mask_keys is not None) and (self.target_mask_keys is not None):
             this_mask = batch["target_mask"].type_as(rcl_per_input_dimension).byte()
             rcl_per_input_dimension = rcl_per_input_dimension * ~this_mask.bool()
